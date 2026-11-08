@@ -1,0 +1,3 @@
+- insert:
+    - id: temporary-messages
+      name: dsh-temporary-messages

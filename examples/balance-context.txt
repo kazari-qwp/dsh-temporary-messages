@@ -1,0 +1,20 @@
+目前余额:{{ await (async () => {
+  const { APP_IDENTITY } = await import('@deepseek-ai/dsh-llm');
+  const balance = await ctx.get('deepseekAccount').getBalance({
+    version: APP_IDENTITY.version,
+    locale: 'zh-CN',
+    timezoneOffsetSeconds: -new Date().getTimezoneOffset() * 60,
+  });
+  if (balance?.status !== 'ready') return '未知';
+  const wallets = [...balance.value, ...balance.bonusWallets]
+    .filter(wallet => wallet.currency === 'CNY');
+  if (wallets.length === 0) return '未知';
+  return wallets.reduce((sum, wallet) => sum + Number(wallet.balance), 0).toFixed(2);
+})() }}¥
+上下文已用{{ (() => {
+  if (!session) return '未知';
+  const meter = ctx.get('tokenMeter');
+  const { contextWindow } = meter.contextPressure(session);
+  if (!contextWindow) return '未知';
+  return (meter.measure(session).totalTokens / contextWindow * 100).toFixed(2);
+})() }}%
