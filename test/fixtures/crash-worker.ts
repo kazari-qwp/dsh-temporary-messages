@@ -19,7 +19,7 @@ ctx.llm.registerAdapter(['test'], new class extends LlmAdapter {
 ctx.on('session/event', (_session, event) => {
   writeSync(fd, JSON.stringify(event) + '\n')
   fsyncSync(fd)
-  if (!armed || event.type !== 'system/message' || event.surfaceOp === 'append') return
+  if (!armed || event.type !== 'user/message' || event.data.content.length || event.surfaceOp === 'append') return
   replacements++
   if (replacements !== (scenario === 'tools' ? 2 : 1)) return
   process.send!({ ready: true, scenario, lastSeq: event.seq })

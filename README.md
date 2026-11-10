@@ -8,10 +8,10 @@
 
 ## 使用
 
-安装打包文件：
+从 [Releases](https://github.com/kazari-qwp/dsh-temporary-messages/releases) 下载已构建的 `.tgz` 安装包：
 
 ```powershell
-dsh plugin --profile web add ".\dsh-temporary-messages-0.1.9.tgz"
+dsh plugin --profile web add ".\dsh-temporary-messages-0.1.10.tgz"
 ```
 
 也可以在 DSH 的插件管理页中安装这个 `.tgz` 文件路径。`web` 是使用的 profile，其他 profile 按实际名称替换。安装完成后刷新页面；没有启用 HMR 的宿主需要重启。
@@ -264,6 +264,8 @@ npm run test:ui
 0.1.8 增加单条消息的压缩函数和 k 限制。外部调用的两个限制均省略时为一次性；页面模板按设置的 token/k 上限刷新。支持将摘要写回上下文，并从后向前处理不同压缩器的重叠范围。35 项自动测试通过。真实 API 连续三次请求、两次工具调用验证了 k=2 到期后，单次压缩函数只接收已完成的旧调用与结果，写回摘要后，新调用及其结果仍正常被模型读取。此次用量为 inputTokens 628、cacheReadTokens 640、outputTokens 81。
 
 0.1.9 根据故障注入结果修复中断恢复。旧版 18 个日志截断点中有 8 个恢复错误；新增写回计划后，23 个截断点及恢复中的再次截断均通过。另修复失败的清理 Promise 阻塞后续对话、取消等待无响应及迟到压缩结果修改历史、等待期间新消息被旧消息覆盖或撤回失效。46 项自动测试通过，包含四种写入场景的独立子进程强杀与实际落盘日志恢复。没有针对未复现的问题增加处理分支。
+
+0.1.10 修复重启后 `developer/message` 或 `system/message does not match an open turn and step`：pre-step 清理改用不受步骤边界约束的空 user 替换标记，发送模型前过滤这些标记。未完成的旧版写入计划恢复时保留原消息 ID，并转换旧标记。回归测试加入官方 V4 格式校验、真实 Agent 日志逐点截断与旧计划再次中断恢复。
 
 ## 对照的官方接口
 

@@ -129,13 +129,15 @@ export function apply(ctx: Context, config: Config): void {
       }
     }
     if (messages.moveToTail(session, position)) changed = true
-    if (!changed) {
+    const cleared = (message: GenerateOptions['messages'][number]) =>
+      message.source?.kind === 'temporary-message-cleared' && message.content.length === 0
+    if (!changed && !request.messages.some(cleared)) {
       yield* next()
       return
     }
 
     // 从已记录的 surface 操作重建，保留 DSH 当前的工具声明序列。
-    const ordered = session.deriveMessages()
+    const ordered = session.deriveMessages().filter(message => !cleared(message))
     Object.freeze(ordered)
     const replacement = markAgentLoopRequest(Object.freeze({
       ...request, messages: ordered, toolHistory: session.toolHistory(),

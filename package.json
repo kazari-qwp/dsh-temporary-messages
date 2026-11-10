@@ -1,9 +1,18 @@
 {
   "name": "dsh-temporary-messages",
-  "version": "0.1.9",
+  "version": "0.1.10",
   "description": "给 DSH 提供会过期的上下文消息和可执行表达式模板",
   "type": "module",
   "license": "MIT",
+  "keywords": ["dsh-plugin", "deepseek-harness", "dsh", "context", "temporary-messages"],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/kazari-qwp/dsh-temporary-messages.git"
+  },
+  "homepage": "https://github.com/kazari-qwp/dsh-temporary-messages#readme",
+  "bugs": {
+    "url": "https://github.com/kazari-qwp/dsh-temporary-messages/issues"
+  },
   "files": [
     "dist",
     "examples",
@@ -41,6 +50,7 @@
     "@deepseek-ai/dsh-client-ui-slots": "0.2.2-rc.1",
     "@deepseek-ai/dsh-llm": "0.2.2-rc.1",
     "@deepseek-ai/dsh-session": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-session-format-v3-to-v4": "^0.2.2-rc.1",
     "@deepseek-ai/dsh-settings": "0.2.2-rc.1",
     "@deepseek-ai/dsh-tools": "0.2.2-rc.1",
     "@deepseek-ai/dsh-typert-protocol": "0.2.2-rc.1",

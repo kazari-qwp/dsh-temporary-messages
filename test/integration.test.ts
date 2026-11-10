@@ -4,11 +4,13 @@ import { readFileSync } from 'node:fs'
 import { Context } from '@deepseek-ai/cordis'
 import { LlmAdapter, ToolCallId, createUserMessage, isAgentLoopRequest, projectToolUpdates } from '@deepseek-ai/dsh-llm'
 import type { GenerateOptions, Message, StreamChunk } from '@deepseek-ai/dsh-llm'
-import { Session, SessionId } from '@deepseek-ai/dsh-session'
+import { Session, SessionId, KNOWN_SESSION_EVENT_TYPES } from '@deepseek-ai/dsh-session'
+import { restoreReleasedV4Artifact } from '@deepseek-ai/dsh-session-format-v3-to-v4'
 import type { ToolDefinition } from '@deepseek-ai/dsh-tools'
 import { mountAgentLoopTestDependencies, mountAgentLoopTestHarness } from '@deepseek-ai/dsh-agent-loop-testkit'
 import * as plugin from '../src/index.ts'
 import { renderTemplate } from '../src/tools.ts'
+import { TemporaryMessages } from '../src/messages.ts'
 
 declare module '@deepseek-ai/dsh-llm' {
   interface MessageSourceMap { 'test-user': { kind: 'test-user' } }
@@ -73,6 +75,36 @@ test('真实 Agent 循环：逐步模板求值、尾部注入、清理旧消息�
     const all = adapter.requests.map(request => request.messages.flatMap(message => message.content.flatMap(block => block.type === 'text' ? [block.text] : [])))
     assert.deepEqual(all[0].slice(-3), ['first', '来自 Alice 的消息', '余额 1'])
     assert.deepEqual(all[1].slice(-4), ['first', 'answer', 'second', '余额 2'])
+    // Session.create 只检查 surface；重启读取磁盘还会检查 turn/step 生命周期。
+    const header = { ...agent.session.header, delegationDepth: 0 }
+    const events = agent.session.snapshotEvents()
+    const validate = (session: Session) => restoreReleasedV4Artifact(JSON.parse(JSON.stringify({
+      header, events: session.snapshotEvents(), inheritedEventCount: 0,
+    })), KNOWN_SESSION_EVENT_TYPES)
+    // 每个落盘截断点都用官方 V4 关系校验，并在重放剩余写入后再校验。
+    for (let cut = 0; cut <= events.length; cut++) {
+      const restored = Session.create(agent.id, events.slice(0, cut))
+      validate(restored)
+      new TemporaryMessages().recover(restored)
+      validate(restored)
+    }
+    // 0.1.9 的未完成计划仍可能带空 system；跨步骤恢复保持原消息 ID。
+    const legacy = JSON.parse(JSON.stringify(events))
+    const plan = legacy.find((event: any) => event.type === 'plugin:temporary-messages/write-plan')
+    for (const write of plan.data.writes) if (write.type === 'user/message' && !write.data.content.length) {
+      write.type = 'system/message'
+      write.data = { turn: 2, step: 1, message: { ...write.data, role: 'system', source: { kind: 'system-prompt' } } }
+    }
+    const restored = Session.create(agent.id, legacy.slice(0, plan.seq + 1))
+    new TemporaryMessages().recover(restored)
+    validate(restored)
+    const recovered = restored.snapshotEvents()
+    for (let cut = plan.seq + 1; cut <= recovered.length; cut++) {
+      const again = Session.create(agent.id, recovered.slice(0, cut))
+      new TemporaryMessages().recover(again)
+      validate(again)
+      assert.deepEqual(again.deriveMessages(), restored.deriveMessages())
+    }
   } finally { await ctx.fiber.dispose() }
 })
 
@@ -119,12 +151,13 @@ test('发送前将临时消息移到原生运行上下文、工具更新之后�
     assert.equal(adapter.requests.length, 2)
     for (let index = 0; index < delivered.length; index++) {
       const restored = replayed[index]
-      const projected = projectToolUpdates(restored.deriveMessages(), restored.requestHeader()?.tools, 'in-history', restored.toolHistory())
+      const projected = projectToolUpdates(restored.deriveMessages().filter(message => message.content.length), restored.requestHeader()?.tools, 'in-history', restored.toolHistory())
       assert.deepEqual(delivered[index].messages, projected.messages)
       assert.deepEqual(delivered[index].tools, projected.tools)
       assert.equal(delivered[index].messages.at(-1)?.source?.kind, 'temporary-message')
     }
     assert.equal(middlewareCalls, 2)
+    assert.ok(delivered.every(request => request.messages.every(message => message.content.length > 0)))
     assert.equal(counter.value, 2)
     const textOf = (request: GenerateOptions) => request.messages.flatMap(m => m.content.flatMap(b => b.type === 'text' ? [b.text] : []))
     assert.deepEqual(textOf(adapter.requests[0]).slice(-3), ['保留 500 token', '只出现一次', '余额 1'])
@@ -137,7 +170,7 @@ test('发送前将临时消息移到原生运行上下文、工具更新之后�
     assert.ok(adapter.requests[1].tools?.some(tool => tool.name === 'new_lookup'))
     const lasting = second.find(m => m.content.some(b => b.type === 'text' && b.text === '保留 500 token'))!
     assert.equal(lasting.source?.kind === 'temporary-message' && lasting.source.bornAt, 0)
-    assert.ok(replayed.every(s => s.snapshotEvents().some(e => e.type === 'system/message' && e.data.message.content.length === 0 && e.surfaceOp !== 'append')))
+    assert.ok(replayed.every(s => s.snapshotEvents().some(e => e.type === 'user/message' && e.data.content.length === 0 && e.surfaceOp !== 'append')))
   } finally { await ctx.fiber.dispose() }
 })
 
@@ -331,7 +364,7 @@ test('清空模式不带旧输出，配置改为保留后下一步立即生效',
     assert.ok(adapter.requests.every(request => request.messages.every(message => message.role !== 'assistant')))
     const second = adapter.requests[1]
     assert.deepEqual(second.messages.flatMap(message => message.content.flatMap(block => block.type === 'text' ? [block.text] : [])).slice(-3), ['first', 'second', 'snapshot'])
-    assert.deepEqual(beforeSend[1].deriveMessages(), second.messages)
+    assert.deepEqual(beforeSend[1].deriveMessages().filter(message => message.content.length), second.messages)
     assert.equal(agent.session.snapshotEvents().filter(event => event.type === 'assistant/message').length, 2)
 
     stopChecking()

@@ -108,8 +108,8 @@ test('同批删除把最早位置之后的剩余消息交给压缩器一次，�
   assert.deepEqual(session.deriveMessages(), before)
   finish([])
   await cleaning
-  assert.deepEqual(session.deriveMessages(), [prefix])
-  assert.deepEqual(Session.create(session.id, session.snapshotEvents()).deriveMessages(), [prefix])
+  assert.deepEqual(session.deriveMessages().filter(message => message.content.length), [prefix])
+  assert.deepEqual(Session.create(session.id, session.snapshotEvents()).deriveMessages().filter(message => message.content.length), [prefix])
   assert.equal(session.snapshotEvents().filter(event => event.type === 'assistant/message').length, 2)
   await queue.clean(session, { turn: 4, step: 1 })
   assert.equal(calls.length, 1, '没有临时消息被删除时，不调用压缩器')
@@ -189,8 +189,8 @@ test('核心不把未闭合调用交给压缩器；已完成调用及结果一�
   assert.equal(inputs.length, 1)
   assert.deepEqual(inputs[0].map(message => message.role), ['assistant', 'tool'])
   assert.ok(inputs[0].every(message => message.id !== pending.id))
-  assert.deepEqual(session.deriveMessages(), [pending])
-  assert.deepEqual(Session.create(session.id, session.snapshotEvents()).deriveMessages(), [pending])
+  assert.deepEqual(session.deriveMessages().filter(message => message.content.length), [pending])
+  assert.deepEqual(Session.create(session.id, session.snapshotEvents()).deriveMessages().filter(message => message.content.length), [pending])
 })
 
 test('只传 k 不继承 token 上限；双限制先到先删，新消息两个计数一起重置', async () => {
@@ -274,7 +274,7 @@ test('字符串恒等和结构化筛选保留原消息结构；恢复后失去�
     answer(session, 100)
     const original = session.deriveMessages().at(-1)
     await queue.clean(session, { turn: 2, step: 1 })
-    assert.deepEqual(session.deriveMessages(), [original])
+    assert.deepEqual(session.deriveMessages().filter(message => message.content.length), [original])
   }
   const session = Session.create(SessionId('missing-callback'))
   const queue = new TemporaryMessages()

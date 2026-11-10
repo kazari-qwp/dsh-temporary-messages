@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { isDeepStrictEqual } from 'node:util'
-import { createSystemMessage, createUserMessage } from '@deepseek-ai/dsh-llm'
+import { createUserMessage, freezeMessage } from '@deepseek-ai/dsh-llm'
 import { appendPluginRecord, pluginRecordOf, SessionLogOffset } from '@deepseek-ai/dsh-session'
 import type { Message, SystemMessage } from '@deepseek-ai/dsh-llm'
 import type { Session, SessionSeq, SurfaceIntent, UserMessage } from '@deepseek-ai/dsh-session'
@@ -45,6 +45,7 @@ interface TemporarySource {
 }
 
 type SurfaceWrite =
+  // 读取旧版本尚未完成的写入计划。
   | { type: 'system/message'; data: StepPosition & { message: SystemMessage }; intent: SurfaceIntent<'system/message'> }
   | { type: 'user/message'; data: UserMessage; intent: SurfaceIntent<'user/message'> }
 
@@ -231,7 +232,10 @@ export class TemporaryMessages {
       for (const write of progress.plan.writes) {
         const id = write.type === 'user/message' ? write.data.id : write.data.message.id
         if (progress.applied.has(id)) continue
-        const event = session.append(write.type, write.data, write.intent)
+        // 旧版空 system 标记携带旧 turn/step，恢复时改用无步号约束的空 user 标记。
+        const event = write.type === 'system/message'
+          ? session.append('user/message', freezeMessage<UserMessage>({ id, role: 'user', content: [], source: { kind: 'temporary-message-cleared' } }), write.intent)
+          : session.append(write.type, write.data, write.intent)
         progress.applied.set(id, event.seq)
       }
       const queued = progress.plan.queued.map(({ item, anchorWrite }) => {
@@ -257,9 +261,10 @@ export class TemporaryMessages {
     signal?.throwIfAborted()
     const state = this.read(session)
     const replacedKeys = new Set([...state.pending.values()].map(item => item.key).filter(key => key !== undefined))
-    const nodes = session.surface.nodes.map(seq => ({
-      seq, message: session.deriveEventMessage(session.eventAt(seq)!),
-    }))
+    const nodes = session.surface.nodes.map(seq => {
+      const message = session.deriveEventMessage(session.eventAt(seq)!)
+      return { seq, message: message?.content.length ? message : null }
+    })
     const settled = new Set<string>()
     const jobs = new Map<Compressor | InlineCompressor, { start: number; inline: boolean }>()
     const addJob = (source: Pick<TemporarySource, 'id' | 'anchor' | 'inlineCompressor'>, fallback: SessionSeq) => {
@@ -347,11 +352,11 @@ export class TemporaryMessages {
           plan.writes.push({ type: 'user/message', data: replacement as UserMessage, intent: {
             surfaceOp: { op: 'replace', startSeq: seq, endSeq: seq }, sourceEventSeqs: [seq],
           } })
-        } else plan.writes.push(this.clearWrite(seq, position))
+        } else plan.writes.push(this.clearWrite(seq))
         continue
       }
       const anchorWrite = plan.writes.length
-      plan.writes.push(this.clearWrite(seq, position))
+      plan.writes.push(this.clearWrite(seq))
       const item = requeued.get(seq)
       if (item) {
         // 第一次移尾留下的空节点就是压缩起点，随日志保存，恢复后仍有效。
@@ -365,7 +370,7 @@ export class TemporaryMessages {
   // 发送前再整理一次：DSH 可能在 pre-step 之后追加时间或工具变更。
   moveToTail(session: Session, position: StepPosition): boolean {
     const recovered = this.recover(session)
-    const visible = session.deriveMessages()
+    const visible = session.deriveMessages().filter(message => message.content.length > 0)
     const first = visible.findIndex(message => message.source.kind === 'temporary-message')
     if (first < 0 || visible.slice(first).every(message => message.source.kind === 'temporary-message')) return recovered
 
@@ -374,7 +379,7 @@ export class TemporaryMessages {
       const event = session.eventAt(seq)!
       const message = session.deriveEventMessage(event)
       if (message?.role !== 'user' || message.source.kind !== 'temporary-message') continue
-      plan.writes.push(this.clearWrite(seq, position))
+      plan.writes.push(this.clearWrite(seq))
       plan.writes.push({ type: 'user/message', data: createUserMessage({
         content: message.content, source: message.source,
       }), intent: { surfaceOp: 'append', sourceEventSeqs: [seq] } })
@@ -383,12 +388,11 @@ export class TemporaryMessages {
     return true
   }
 
-  private clearWrite(seq: SessionSeq, position: StepPosition): SurfaceWrite {
-    // 空 system 节点不产生模型输入，也不干扰 DSH 的工具变更历史。
-    return { type: 'system/message', data: {
-      turn: position.turn, step: position.step,
-      message: createSystemMessage(''),
-    }, intent: { surfaceOp: { op: 'replace', startSeq: seq, endSeq: seq }, sourceEventSeqs: [seq] } }
+  private clearWrite(seq: SessionSeq): SurfaceWrite {
+    // pre-step 尚未写入 step/start；空 user 标记不要求打开的步骤，适配器会略过它。
+    return { type: 'user/message', data: createUserMessage({
+      content: [], source: { kind: 'temporary-message-cleared' },
+    }), intent: { surfaceOp: { op: 'replace', startSeq: seq, endSeq: seq }, sourceEventSeqs: [seq] } }
   }
 
   pending(session: Session): UserMessage[] {
